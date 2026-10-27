@@ -119,10 +119,15 @@ except Exception as erro:
 st.sidebar.title("🔎 Filtros")
 st.sidebar.caption("Selecione os períodos e as categorias que deseja analisar.")
 
-# 1. ANO — intervalo de anos
-anos_disponiveis = sorted(
-    dados["Ano"].dropna().unique().tolist()
-)
+
+def definir_todos(prefixo, itens, valor):
+    """Callback dos botões: escreve direto nas keys dos checkboxes."""
+    for item in itens:
+        st.session_state[f"{prefixo}_{item}"] = valor
+
+
+# 1. ANO
+anos_disponiveis = sorted(dados["Ano"].dropna().unique().tolist())
 
 ano_min, ano_max = st.sidebar.select_slider(
     "📅 Período (ano)",
@@ -130,162 +135,80 @@ ano_min, ano_max = st.sidebar.select_slider(
     value=(min(anos_disponiveis), max(anos_disponiveis))
 )
 
-anos_selecionados = [
-    ano for ano in anos_disponiveis
-    if ano_min <= ano <= ano_max
-]
-
-dados_ano = dados[
-    dados["Ano"].isin(anos_selecionados)
-].copy()
+anos_selecionados = [a for a in anos_disponiveis if ano_min <= a <= ano_max]
+dados_ano = dados[dados["Ano"].isin(anos_selecionados)].copy()
 
 
-# 2. BIOMAS — checkboxes
+# 2. BIOMAS (checkbox)
 st.sidebar.subheader("🌳 Biomas")
 
 biomas_disponiveis = (
     dados_ano.groupby("Bioma")["total_focos"]
-    .sum()
-    .sort_values(ascending=False)
-    .index.tolist()
+    .sum().sort_values(ascending=False).index.tolist()
 )
 
-if st.sidebar.button("Selecionar todos os biomas"):
-    st.session_state["biomas_selecionados"] = biomas_disponiveis.copy()
-
-if st.sidebar.button("Limpar seleção de biomas"):
-    st.session_state["biomas_selecionados"] = []
-
-if "biomas_selecionados" not in st.session_state:
-    st.session_state["biomas_selecionados"] = biomas_disponiveis.copy()
-
-# Remove da seleção biomas que não estão mais disponíveis
-st.session_state["biomas_selecionados"] = [
-    b for b in st.session_state["biomas_selecionados"]
-    if b in biomas_disponiveis
-]
+st.sidebar.button(
+    "Selecionar todos os biomas",
+    on_click=definir_todos, args=("bioma", biomas_disponiveis, True)
+)
+st.sidebar.button(
+    "Limpar seleção de biomas",
+    on_click=definir_todos, args=("bioma", biomas_disponiveis, False)
+)
 
 biomas_selecionados = []
-
 for bioma in biomas_disponiveis:
-    marcado = st.sidebar.checkbox(
-        bioma,
-        value=bioma in st.session_state["biomas_selecionados"],
-        key=f"bioma_{bioma}"
-    )
-
-    if marcado:
+    st.session_state.setdefault(f"bioma_{bioma}", True)
+    if st.sidebar.checkbox(bioma, key=f"bioma_{bioma}"):
         biomas_selecionados.append(bioma)
 
-st.session_state["biomas_selecionados"] = biomas_selecionados
-
-dados_bioma = dados_ano[
-    dados_ano["Bioma"].isin(biomas_selecionados)
-].copy()
+dados_bioma = dados_ano[dados_ano["Bioma"].isin(biomas_selecionados)].copy()
 
 
-# 3. MESES — checkboxes
+# 3. MESES (checkbox)
 st.sidebar.subheader("📆 Meses")
 
 nomes_meses = {
-    1: "Janeiro",
-    2: "Fevereiro",
-    3: "Março",
-    4: "Abril",
-    5: "Maio",
-    6: "Junho",
-    7: "Julho",
-    8: "Agosto",
-    9: "Setembro",
-    10: "Outubro",
-    11: "Novembro",
-    12: "Dezembro"
+    1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
+    5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
+    9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
 }
 
-meses_disponiveis = sorted(
-    dados_bioma["Mes"].dropna().unique().astype(int).tolist()
+meses_disponiveis = sorted(dados_bioma["Mes"].dropna().unique().astype(int).tolist())
+
+st.sidebar.button(
+    "Selecionar todos os meses",
+    on_click=definir_todos, args=("mes", meses_disponiveis, True)
+)
+st.sidebar.button(
+    "Limpar seleção de meses",
+    on_click=definir_todos, args=("mes", meses_disponiveis, False)
 )
 
-if st.sidebar.button("Selecionar todos os meses"):
-    st.session_state["meses_selecionados"] = meses_disponiveis.copy()
-
-if st.sidebar.button("Limpar seleção de meses"):
-    st.session_state["meses_selecionados"] = []
-
-if "meses_selecionados" not in st.session_state:
-    st.session_state["meses_selecionados"] = meses_disponiveis.copy()
-
-st.session_state["meses_selecionados"] = [
-    m for m in st.session_state["meses_selecionados"]
-    if m in meses_disponiveis
-]
-
 meses_selecionados = []
-
 for mes in meses_disponiveis:
-    marcado = st.sidebar.checkbox(
-        nomes_meses[mes],
-        value=mes in st.session_state["meses_selecionados"],
-        key=f"mes_{mes}"
-    )
-
-    if marcado:
+    st.session_state.setdefault(f"mes_{mes}", True)
+    if st.sidebar.checkbox(nomes_meses[mes], key=f"mes_{mes}"):
         meses_selecionados.append(mes)
 
-st.session_state["meses_selecionados"] = meses_selecionados
-
-dados_base = dados_bioma[
-    dados_bioma["Mes"].isin(meses_selecionados)
-].copy()
+dados_base = dados_bioma[dados_bioma["Mes"].isin(meses_selecionados)].copy()
 
 
-# 4. MUNICÍPIOS — checkboxes
+# 4. MUNICÍPIOS (multiselect; vazio = todos)
 st.sidebar.subheader("📍 Municípios")
 
 municipios_disponiveis = (
     dados_base.groupby("Municipio")["total_focos"]
-    .sum()
-    .sort_values(ascending=False)
-    .index.tolist()
+    .sum().sort_values(ascending=False).index.tolist()
 )
 
-if st.sidebar.button("Selecionar todos os municípios"):
-    st.session_state["municipios_selecionados"] = municipios_disponiveis.copy()
+municipios_escolhidos = st.sidebar.multiselect(
+    "Buscar município",
+    options=municipios_disponiveis,
+    placeholder="Todos"
+)
+municipios_selecionados = municipios_escolhidos or municipios_disponiveis
 
-if st.sidebar.button("Limpar seleção de municípios"):
-    st.session_state["municipios_selecionados"] = []
-
-if "municipios_selecionados" not in st.session_state:
-    st.session_state["municipios_selecionados"] = municipios_disponiveis.copy()
-
-st.session_state["municipios_selecionados"] = [
-    m for m in st.session_state["municipios_selecionados"]
-    if m in municipios_disponiveis
-]
-
-municipios_selecionados = []
-
-# Limita a quantidade exibida para a barra lateral não ficar excessivamente longa
-limite_municipios_exibidos = 100
-municipios_exibidos = municipios_disponiveis[:limite_municipios_exibidos]
-
-for municipio in municipios_exibidos:
-    marcado = st.sidebar.checkbox(
-        municipio,
-        value=municipio in st.session_state["municipios_selecionados"],
-        key=f"municipio_{municipio}"
-    )
-
-    if marcado:
-        municipios_selecionados.append(municipio)
-
-st.session_state["municipios_selecionados"] = municipios_selecionados
-
-if len(municipios_disponiveis) > limite_municipios_exibidos:
-    st.sidebar.caption(
-        f"Exibindo os {limite_municipios_exibidos} municípios "
-        "com mais focos no período selecionado."
-    )
 
 # 5. APLICAÇÃO DOS FILTROS
 dados_filtrados = dados_base[
@@ -295,7 +218,7 @@ dados_filtrados = dados_base[
 st.sidebar.divider()
 st.sidebar.caption(f"Biomas selecionados: {len(biomas_selecionados)}")
 st.sidebar.caption(f"Meses selecionados: {len(meses_selecionados)}")
-st.sidebar.caption(f"Municípios selecionados: {len(municipios_selecionados)}")
+st.sidebar.caption(f"Municípios considerados: {len(municipios_selecionados)}")
 
 if st.sidebar.button("Limpar cache dos dados"):
     st.cache_data.clear()
@@ -344,6 +267,49 @@ def formatar_decimal(valor, casas=2):
 
     return f"{valor:.{casas}f}".replace(".", ",")
 
+# =========================================================
+# VARIAÇÃO YEAR-OVER-YEAR (YoY)
+# =========================================================
+
+def calcular_yoy(
+    dados,
+    ano_atual,
+    biomas,
+    meses,
+    municipios
+):
+    """
+    Compara o último ano selecionado com o ano anterior,
+    mantendo os filtros de bioma, mês e município.
+    """
+
+    if ano_atual - 1 not in dados["Ano"].unique():
+        return None
+
+    def total_do_ano(ano):
+        df = dados[
+            (dados["Ano"] == ano)
+            & dados["Bioma"].isin(biomas)
+            & dados["Mes"].isin(meses)
+            & dados["Municipio"].isin(municipios)
+        ]
+
+        return int(df["total_focos"].sum())
+
+    atual = total_do_ano(ano_atual)
+    anterior = total_do_ano(ano_atual - 1)
+
+    if anterior == 0:
+        return None
+
+    return ((atual - anterior) / anterior) * 100
+
+
+def formatar_yoy(valor):
+    if valor is None or pd.isna(valor):
+        return "N/D"
+
+    return f"{valor:+.1f}%".replace(".", ",")
 
 # =========================================================
 # VALIDAÇÃO DOS FILTROS
@@ -410,42 +376,32 @@ municipio_critico = focos_por_municipio.iloc[0]["Municipio"]
 
 
 # =========================================================
-# CABEÇALHO E KPIs
+# CABEÇALHO
 # =========================================================
 
-st.subheader("Visão geral")
+st.subheader("Monitoramento de Queimadas na Bahia")
 
 st.caption(
-    f"Período selecionado: "
-    f"{min(anos_selecionados) if anos_selecionados else '—'} "
-    f"a {max(anos_selecionados) if anos_selecionados else '—'}"
-    if anos_selecionados
-    else "Nenhum ano selecionado"
+    f"Período selecionado: {min(anos_selecionados)} "
+    f"a {max(anos_selecionados)}"
 )
 
-col1, col2, col3, col4 = st.columns(4)
+ano_referencia = max(anos_selecionados)
 
-col1.metric(
-    "Total de focos",
-    formatar_inteiro(total_focos)
+yoy_geral = calcular_yoy(
+    dados,
+    ano_referencia,
+    biomas_selecionados,
+    meses_selecionados,
+    municipios_selecionados
 )
 
-col2.metric(
-    "Ano mais crítico",
-    str(ano_critico)
+st.caption(
+    f"Comparação YoY: {ano_referencia} "
+    f"em relação a {ano_referencia - 1}"
+    if yoy_geral is not None
+    else "Comparação YoY indisponível para o período."
 )
-
-col3.metric(
-    "Bioma mais afetado",
-    bioma_critico
-)
-
-col4.metric(
-    "Risco médio de fogo",
-    formatar_decimal(risco_medio, 3)
-)
-
-st.divider()
 
 
 # =========================================================
@@ -465,6 +421,40 @@ aba_geral, aba_bioma, aba_municipio, aba_sazonalidade = st.tabs([
 # =========================================================
 
 with aba_geral:
+
+    # KPIs DA VISÃO GERAL
+    focos_ano_ref = int(
+        focos_por_ano.loc[focos_por_ano["Ano"] == ano_referencia, "total_focos"].sum()
+    )
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric(
+        "Total de focos",
+        formatar_inteiro(total_focos)
+    )
+
+    col2.metric(
+        "Variação YoY",
+        formatar_yoy(yoy_geral),
+        delta=(
+            f"{formatar_yoy(yoy_geral)} vs. ano anterior"
+            if yoy_geral is not None
+            else None
+        )
+    )
+
+    col3.metric(
+        "Município com mais focos",
+        municipio_critico
+    )
+
+    col4.metric(
+        "Risco médio de fogo",
+        formatar_decimal(risco_medio, 3)
+    )
+
+    st.divider()
 
     st.subheader("Evolução anual dos focos")
 
@@ -524,9 +514,24 @@ with aba_geral:
 
 with aba_bioma:
 
+    # KPIs DA PÁGINA BIOMAS
+
+    bioma_top = focos_por_bioma.iloc[0]
+    bioma_mais_focos = bioma_top["Bioma"]
+    participacao_biomas = bioma_top["total_focos"] / total_focos * 100
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric("Bioma com mais focos", bioma_mais_focos)
+    col2.metric("Total de focos", formatar_inteiro(total_focos))
+    col3.metric("Participação do bioma líder", f"{participacao_biomas:.1f}%".replace(".", ","))
+    col4.metric("Variação YoY", formatar_yoy(yoy_geral))
+
+    st.divider()
+
     st.subheader("Distribuição por bioma")
 
-    dados_bioma = (
+    resumo_bioma = (
         dados_filtrados
         .groupby("Bioma", as_index=False)
         .agg(
@@ -536,7 +541,7 @@ with aba_bioma:
     )
 
     fig_bioma = px.bar(
-        dados_bioma,
+        resumo_bioma,
         x="Bioma",
         y="total_focos",
         text="total_focos",
@@ -558,7 +563,7 @@ with aba_bioma:
     )
 
     fig_pizza = px.pie(
-        dados_bioma,
+        resumo_bioma,
         names="Bioma",
         values="total_focos",
         title="Participação dos biomas",
@@ -580,6 +585,46 @@ with aba_bioma:
 # =========================================================
 
 with aba_municipio:
+
+        # KPIs DA PÁGINA MUNICÍPIOS
+
+    total_focos_municipios = int(
+        focos_por_municipio["total_focos"].sum()
+    )
+
+    municipio_mais_focos = (
+        focos_por_municipio.iloc[0]["Municipio"]
+    )
+
+    risco_medio_municipios = media_ponderada(
+        dados_filtrados,
+        "risco_fogo_medio",
+        "qtd_risco_valido"
+    )
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric(
+        "Município com mais focos",
+        municipio_mais_focos
+    )
+
+    col2.metric(
+        "Total de focos",
+        formatar_inteiro(total_focos_municipios)
+    )
+
+    col3.metric(
+        "Variação YoY",
+        formatar_yoy(yoy_geral)
+    )
+
+    col4.metric(
+        "Risco médio de fogo",
+        formatar_decimal(risco_medio_municipios, 3)
+    )
+
+    st.divider()
 
     st.subheader("Ranking de municípios")
 
@@ -704,7 +749,11 @@ with aba_sazonalidade:
         focos_por_mes["total_focos"].idxmax()
     ]
 
-    col1, col2 = st.columns(2)
+   # Média mensal de focos no período filtrado
+    media_mensal = focos_por_mes["total_focos"].mean()
+
+    # Indicadores de sazonalidade
+    col1, col2, col3, col4 = st.columns(4)
 
     col1.metric(
         "Mês com mais focos",
@@ -714,6 +763,16 @@ with aba_sazonalidade:
     col2.metric(
         "Focos no mês mais crítico",
         formatar_inteiro(mes_critico["total_focos"])
+    )
+
+    col3.metric(
+        "Média mensal de focos",
+        formatar_inteiro(media_mensal)
+    )
+
+    col4.metric(
+        "Variação anual (YoY)",
+        formatar_yoy(yoy_geral)
     )
 
     fig_mensal = px.bar(
