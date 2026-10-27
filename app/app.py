@@ -111,17 +111,15 @@ except Exception as erro:
     st.stop()
 
 
+
 # =========================================================
 # FILTROS LATERAIS
 # =========================================================
 
 st.sidebar.title("🔎 Filtros")
-st.sidebar.caption("Ajuste os controles para explorar os dados.")
+st.sidebar.caption("Selecione os períodos e as categorias que deseja analisar.")
 
-# ---------------------------------------------------------
-# 1. ANO: INTERVALO DESLIZANTE
-# ---------------------------------------------------------
-
+# 1. ANO — intervalo de anos
 anos_disponiveis = sorted(
     dados["Ano"].dropna().unique().tolist()
 )
@@ -142,9 +140,8 @@ dados_ano = dados[
 ].copy()
 
 
-# ---------------------------------------------------------
-# 2. BIOMA: SLIDER PARA QUANTIDADE DE BIOMAS
-# ---------------------------------------------------------
+# 2. BIOMAS — checkboxes
+st.sidebar.subheader("🌳 Biomas")
 
 biomas_disponiveis = (
     dados_ano.groupby("Bioma")["total_focos"]
@@ -153,25 +150,42 @@ biomas_disponiveis = (
     .index.tolist()
 )
 
-quantidade_biomas = st.sidebar.slider(
-    "🌳 Quantidade de biomas no ranking",
-    min_value=1,
-    max_value=len(biomas_disponiveis),
-    value=len(biomas_disponiveis)
-)
+if st.sidebar.button("Selecionar todos os biomas"):
+    st.session_state["biomas_selecionados"] = biomas_disponiveis.copy()
 
-biomas_selecionados = biomas_disponiveis[
-    :quantidade_biomas
+if st.sidebar.button("Limpar seleção de biomas"):
+    st.session_state["biomas_selecionados"] = []
+
+if "biomas_selecionados" not in st.session_state:
+    st.session_state["biomas_selecionados"] = biomas_disponiveis.copy()
+
+# Remove da seleção biomas que não estão mais disponíveis
+st.session_state["biomas_selecionados"] = [
+    b for b in st.session_state["biomas_selecionados"]
+    if b in biomas_disponiveis
 ]
 
-dados_bioma_filtrados = dados_ano[
+biomas_selecionados = []
+
+for bioma in biomas_disponiveis:
+    marcado = st.sidebar.checkbox(
+        bioma,
+        value=bioma in st.session_state["biomas_selecionados"],
+        key=f"bioma_{bioma}"
+    )
+
+    if marcado:
+        biomas_selecionados.append(bioma)
+
+st.session_state["biomas_selecionados"] = biomas_selecionados
+
+dados_bioma = dados_ano[
     dados_ano["Bioma"].isin(biomas_selecionados)
 ].copy()
 
 
-# ---------------------------------------------------------
-# 3. MÊS: INTERVALO DESLIZANTE
-# ---------------------------------------------------------
+# 3. MESES — checkboxes
+st.sidebar.subheader("📆 Meses")
 
 nomes_meses = {
     1: "Janeiro",
@@ -188,25 +202,45 @@ nomes_meses = {
     12: "Dezembro"
 }
 
-mes_min, mes_max = st.sidebar.select_slider(
-    "📆 Período (mês)",
-    options=list(range(1, 13)),
-    value=(1, 12),
-    format_func=lambda mes: nomes_meses[mes]
+meses_disponiveis = sorted(
+    dados_bioma["Mes"].dropna().unique().astype(int).tolist()
 )
 
-meses_selecionados = list(
-    range(mes_min, mes_max + 1)
-)
+if st.sidebar.button("Selecionar todos os meses"):
+    st.session_state["meses_selecionados"] = meses_disponiveis.copy()
 
-dados_base = dados_bioma_filtrados[
-    dados_bioma_filtrados["Mes"].isin(meses_selecionados)
+if st.sidebar.button("Limpar seleção de meses"):
+    st.session_state["meses_selecionados"] = []
+
+if "meses_selecionados" not in st.session_state:
+    st.session_state["meses_selecionados"] = meses_disponiveis.copy()
+
+st.session_state["meses_selecionados"] = [
+    m for m in st.session_state["meses_selecionados"]
+    if m in meses_disponiveis
+]
+
+meses_selecionados = []
+
+for mes in meses_disponiveis:
+    marcado = st.sidebar.checkbox(
+        nomes_meses[mes],
+        value=mes in st.session_state["meses_selecionados"],
+        key=f"mes_{mes}"
+    )
+
+    if marcado:
+        meses_selecionados.append(mes)
+
+st.session_state["meses_selecionados"] = meses_selecionados
+
+dados_base = dados_bioma[
+    dados_bioma["Mes"].isin(meses_selecionados)
 ].copy()
 
 
-# ---------------------------------------------------------
-# 4. MUNICÍPIO: SLIDER PARA TAMANHO DO RANKING
-# ---------------------------------------------------------
+# 4. MUNICÍPIOS — checkboxes
+st.sidebar.subheader("📍 Municípios")
 
 municipios_disponiveis = (
     dados_base.groupby("Municipio")["total_focos"]
@@ -215,50 +249,58 @@ municipios_disponiveis = (
     .index.tolist()
 )
 
-if not municipios_disponiveis:
-    st.warning(
-        "Não há municípios para a combinação de filtros selecionada."
-    )
-    st.stop()
+if st.sidebar.button("Selecionar todos os municípios"):
+    st.session_state["municipios_selecionados"] = municipios_disponiveis.copy()
 
-quantidade_maxima = min(
-    100,
-    len(municipios_disponiveis)
-)
+if st.sidebar.button("Limpar seleção de municípios"):
+    st.session_state["municipios_selecionados"] = []
 
-quantidade_municipios = st.sidebar.slider(
-    "📍 Quantidade de municípios",
-    min_value=1,
-    max_value=quantidade_maxima,
-    value=min(10, quantidade_maxima)
-)
+if "municipios_selecionados" not in st.session_state:
+    st.session_state["municipios_selecionados"] = municipios_disponiveis.copy()
 
-municipios_selecionados = municipios_disponiveis[
-    :quantidade_municipios
+st.session_state["municipios_selecionados"] = [
+    m for m in st.session_state["municipios_selecionados"]
+    if m in municipios_disponiveis
 ]
 
+municipios_selecionados = []
 
-# ---------------------------------------------------------
+# Limita a quantidade exibida para a barra lateral não ficar excessivamente longa
+limite_municipios_exibidos = 100
+municipios_exibidos = municipios_disponiveis[:limite_municipios_exibidos]
+
+for municipio in municipios_exibidos:
+    marcado = st.sidebar.checkbox(
+        municipio,
+        value=municipio in st.session_state["municipios_selecionados"],
+        key=f"municipio_{municipio}"
+    )
+
+    if marcado:
+        municipios_selecionados.append(municipio)
+
+st.session_state["municipios_selecionados"] = municipios_selecionados
+
+if len(municipios_disponiveis) > limite_municipios_exibidos:
+    st.sidebar.caption(
+        f"Exibindo os {limite_municipios_exibidos} municípios "
+        "com mais focos no período selecionado."
+    )
+
 # 5. APLICAÇÃO DOS FILTROS
-# ---------------------------------------------------------
-
 dados_filtrados = dados_base[
     dados_base["Municipio"].isin(municipios_selecionados)
 ].copy()
 
 st.sidebar.divider()
-
-st.sidebar.caption(
-    f"Biomas incluídos: {len(biomas_selecionados)}"
-)
-
-st.sidebar.caption(
-    f"Municípios incluídos: {len(municipios_selecionados)}"
-)
+st.sidebar.caption(f"Biomas selecionados: {len(biomas_selecionados)}")
+st.sidebar.caption(f"Meses selecionados: {len(meses_selecionados)}")
+st.sidebar.caption(f"Municípios selecionados: {len(municipios_selecionados)}")
 
 if st.sidebar.button("Limpar cache dos dados"):
     st.cache_data.clear()
     st.rerun()
+
 
 
 # =========================================================
