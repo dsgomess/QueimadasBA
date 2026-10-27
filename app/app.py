@@ -116,32 +116,62 @@ except Exception as erro:
 # =========================================================
 
 st.sidebar.title("🔎 Filtros")
+st.sidebar.caption("Ajuste os controles para explorar os dados.")
 
-st.sidebar.caption(
-    "Selecione os critérios para atualizar os indicadores."
-)
+# ---------------------------------------------------------
+# 1. ANO: INTERVALO DESLIZANTE
+# ---------------------------------------------------------
 
 anos_disponiveis = sorted(
     dados["Ano"].dropna().unique().tolist()
 )
 
-anos_selecionados = st.sidebar.multiselect(
-    "Ano",
+ano_min, ano_max = st.sidebar.select_slider(
+    "📅 Período (ano)",
     options=anos_disponiveis,
-    default=anos_disponiveis
+    value=(min(anos_disponiveis), max(anos_disponiveis))
 )
 
-biomas_disponiveis = sorted(
-    dados["Bioma"].dropna().unique().tolist()
+anos_selecionados = [
+    ano for ano in anos_disponiveis
+    if ano_min <= ano <= ano_max
+]
+
+dados_ano = dados[
+    dados["Ano"].isin(anos_selecionados)
+].copy()
+
+
+# ---------------------------------------------------------
+# 2. BIOMA: SLIDER PARA QUANTIDADE DE BIOMAS
+# ---------------------------------------------------------
+
+biomas_disponiveis = (
+    dados_ano.groupby("Bioma")["total_focos"]
+    .sum()
+    .sort_values(ascending=False)
+    .index.tolist()
 )
 
-biomas_selecionados = st.sidebar.multiselect(
-    "Bioma",
-    options=biomas_disponiveis,
-    default=biomas_disponiveis
+quantidade_biomas = st.sidebar.slider(
+    "🌳 Quantidade de biomas no ranking",
+    min_value=1,
+    max_value=len(biomas_disponiveis),
+    value=len(biomas_disponiveis)
 )
 
-meses_disponiveis = list(range(1, 13))
+biomas_selecionados = biomas_disponiveis[
+    :quantidade_biomas
+]
+
+dados_bioma_filtrados = dados_ano[
+    dados_ano["Bioma"].isin(biomas_selecionados)
+].copy()
+
+
+# ---------------------------------------------------------
+# 3. MÊS: INTERVALO DESLIZANTE
+# ---------------------------------------------------------
 
 nomes_meses = {
     1: "Janeiro",
@@ -158,39 +188,73 @@ nomes_meses = {
     12: "Dezembro"
 }
 
-meses_selecionados = st.sidebar.multiselect(
-    "Mês",
-    options=meses_disponiveis,
-    default=meses_disponiveis,
+mes_min, mes_max = st.sidebar.select_slider(
+    "📆 Período (mês)",
+    options=list(range(1, 13)),
+    value=(1, 12),
     format_func=lambda mes: nomes_meses[mes]
 )
 
-# Aplica os filtros de ano, bioma e mês antes de exibir
-# a lista de municípios disponíveis.
+meses_selecionados = list(
+    range(mes_min, mes_max + 1)
+)
 
-dados_base = dados[
-    dados["Ano"].isin(anos_selecionados)
-    & dados["Bioma"].isin(biomas_selecionados)
-    & dados["Mes"].isin(meses_selecionados)
+dados_base = dados_bioma_filtrados[
+    dados_bioma_filtrados["Mes"].isin(meses_selecionados)
 ].copy()
 
-municipios_disponiveis = sorted(
-    dados_base["Municipio"].dropna().unique().tolist()
+
+# ---------------------------------------------------------
+# 4. MUNICÍPIO: SLIDER PARA TAMANHO DO RANKING
+# ---------------------------------------------------------
+
+municipios_disponiveis = (
+    dados_base.groupby("Municipio")["total_focos"]
+    .sum()
+    .sort_values(ascending=False)
+    .index.tolist()
 )
 
-municipios_selecionados = st.sidebar.multiselect(
-    "Município",
-    options=municipios_disponiveis,
-    default=municipios_disponiveis
+if not municipios_disponiveis:
+    st.warning(
+        "Não há municípios para a combinação de filtros selecionada."
+    )
+    st.stop()
+
+quantidade_maxima = min(
+    100,
+    len(municipios_disponiveis)
 )
 
-# Filtros finais aplicados a todas as análises.
+quantidade_municipios = st.sidebar.slider(
+    "📍 Quantidade de municípios",
+    min_value=1,
+    max_value=quantidade_maxima,
+    value=min(10, quantidade_maxima)
+)
+
+municipios_selecionados = municipios_disponiveis[
+    :quantidade_municipios
+]
+
+
+# ---------------------------------------------------------
+# 5. APLICAÇÃO DOS FILTROS
+# ---------------------------------------------------------
 
 dados_filtrados = dados_base[
     dados_base["Municipio"].isin(municipios_selecionados)
 ].copy()
 
 st.sidebar.divider()
+
+st.sidebar.caption(
+    f"Biomas incluídos: {len(biomas_selecionados)}"
+)
+
+st.sidebar.caption(
+    f"Municípios incluídos: {len(municipios_selecionados)}"
+)
 
 if st.sidebar.button("Limpar cache dos dados"):
     st.cache_data.clear()
