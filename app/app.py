@@ -30,7 +30,6 @@ st.caption(
 # =========================================================
 
 cfg = Config()
-
 warehouse_id = os.getenv("DATABRICKS_WAREHOUSE_ID")
 
 
@@ -57,7 +56,6 @@ def consultar_gold(query):
     ) as conexao:
 
         with conexao.cursor() as cursor:
-
             cursor.execute(query)
 
             colunas = [
@@ -71,93 +69,275 @@ def consultar_gold(query):
 
 
 # =========================================================
-# CONSULTA ÀS TABELAS GOLD
+# CARREGAMENTO DA GOLD ANALÍTICA
 # =========================================================
 
-try:
+@st.cache_data(ttl=600)
+def carregar_dados():
 
-    dados_anual = consultar_gold("""
+    query = """
         SELECT
             Ano,
-            total_focos,
-            risco_fogo_medio,
-            variacao_percentual
-        FROM workspace.queimadas_bahia.gold_focos_anual
-        ORDER BY Ano
-    """)
-
-    dados_bioma = consultar_gold("""
-        SELECT
+            Mes,
             Bioma,
-            total_focos,
-            risco_fogo_medio,
-            precipitacao_media
-        FROM workspace.queimadas_bahia.gold_focos_bioma
-        ORDER BY total_focos DESC
-    """)
-
-    dados_municipio = consultar_gold("""
-        SELECT
-            Estado,
             Municipio,
             total_focos,
             risco_fogo_medio,
-            dias_sem_chuva_medio
-        FROM workspace.queimadas_bahia.gold_focos_municipio
-        ORDER BY total_focos DESC
-    """)
+            precipitacao_media,
+            dias_sem_chuva_medio,
+            qtd_risco_valido,
+            qtd_precipitacao_valida,
+            qtd_dias_sem_chuva_validos
+        FROM workspace.queimadas_bahia.gold_focos_analitico
+    """
+
+    dados = consultar_gold(query)
+
+    dados["Ano"] = dados["Ano"].astype(int)
+    dados["Mes"] = dados["Mes"].astype(int)
+    dados["total_focos"] = dados["total_focos"].astype(int)
+
+    return dados
+
+
+try:
+
+    dados = carregar_dados()
 
 except Exception as erro:
 
-    st.error("Não foi possível consultar as tabelas Gold.")
-
+    st.error("Não foi possível carregar a tabela Gold analítica.")
     st.exception(erro)
+    st.stop()
+
+
+# =========================================================
+# FILTROS LATERAIS
+# =========================================================
+
+st.sidebar.title("🔎 Filtros")
+
+st.sidebar.caption(
+    "Selecione os critérios para atualizar os indicadores."
+)
+
+anos_disponiveis = sorted(
+    dados["Ano"].dropna().unique().tolist()
+)
+
+anos_selecionados = st.sidebar.multiselect(
+    "Ano",
+    options=anos_disponiveis,
+    default=anos_disponiveis
+)
+
+biomas_disponiveis = sorted(
+    dados["Bioma"].dropna().unique().tolist()
+)
+
+biomas_selecionados = st.sidebar.multiselect(
+    "Bioma",
+    options=biomas_disponiveis,
+    default=biomas_disponiveis
+)
+
+meses_disponiveis = list(range(1, 13))
+
+nomes_meses = {
+    1: "Janeiro",
+    2: "Fevereiro",
+    3: "Março",
+    4: "Abril",
+    5: "Maio",
+    6: "Junho",
+    7: "Julho",
+    8: "Agosto",
+    9: "Setembro",
+    10: "Outubro",
+    11: "Novembro",
+    12: "Dezembro"
+}
+
+meses_selecionados = st.sidebar.multiselect(
+    "Mês",
+    options=meses_disponiveis,
+    default=meses_disponiveis,
+    format_func=lambda mes: nomes_meses[mes]
+)
+
+# Aplica os filtros de ano, bioma e mês antes de exibir
+# a lista de municípios disponíveis.
+
+dados_base = dados[
+    dados["Ano"].isin(anos_selecionados)
+    & dados["Bioma"].isin(biomas_selecionados)
+    & dados["Mes"].isin(meses_selecionados)
+].copy()
+
+municipios_disponiveis = sorted(
+    dados_base["Municipio"].dropna().unique().tolist()
+)
+
+municipios_selecionados = st.sidebar.multiselect(
+    "Município",
+    options=municipios_disponiveis,
+    default=municipios_disponiveis
+)
+
+# Filtros finais aplicados a todas as análises.
+
+dados_filtrados = dados_base[
+    dados_base["Municipio"].isin(municipios_selecionados)
+].copy()
+
+st.sidebar.divider()
+
+if st.sidebar.button("Limpar cache dos dados"):
+    st.cache_data.clear()
+    st.rerun()
+
+
+# =========================================================
+# FUNÇÕES AUXILIARES PARA OS KPIs
+# =========================================================
+
+def media_ponderada(
+    df,
+    coluna_media,
+    coluna_quantidade
+):
+
+    validos = df[
+        df[coluna_media].notna()
+        & (df[coluna_quantidade] > 0)
+    ]
+
+    if validos.empty:
+        return None
+
+    denominador = validos[coluna_quantidade].sum()
+
+    if denominador == 0:
+        return None
+
+    return (
+        validos[coluna_media]
+        * validos[coluna_quantidade]
+    ).sum() / denominador
+
+
+def formatar_inteiro(valor):
+
+    return f"{int(valor):,}".replace(",", ".")
+
+
+def formatar_decimal(valor, casas=2):
+
+    if valor is None or pd.isna(valor):
+        return "N/D"
+
+    return f"{valor:.{casas}f}".replace(".", ",")
+
+
+# =========================================================
+# VALIDAÇÃO DOS FILTROS
+# =========================================================
+
+if dados_filtrados.empty:
+
+    st.warning(
+        "Nenhum registro encontrado para os filtros selecionados. "
+        "Altere os critérios na barra lateral."
+    )
 
     st.stop()
 
 
 # =========================================================
-# INDICADORES GERAIS
+# INDICADORES DINÂMICOS
 # =========================================================
 
-total_focos = int(dados_anual["total_focos"].sum())
+total_focos = int(
+    dados_filtrados["total_focos"].sum()
+)
+
+risco_medio = media_ponderada(
+    dados_filtrados,
+    "risco_fogo_medio",
+    "qtd_risco_valido"
+)
+
+# Ano com maior número de focos dentro da seleção.
+
+focos_por_ano = (
+    dados_filtrados
+    .groupby("Ano", as_index=False)["total_focos"]
+    .sum()
+)
 
 ano_critico = int(
-    dados_anual.loc[
-        dados_anual["total_focos"].idxmax(),
+    focos_por_ano.loc[
+        focos_por_ano["total_focos"].idxmax(),
         "Ano"
     ]
 )
 
-bioma_critico = dados_bioma.iloc[0]["Bioma"]
+# Bioma e município com mais focos dentro da seleção.
 
-municipio_critico = dados_municipio.iloc[0]["Municipio"]
+focos_por_bioma = (
+    dados_filtrados
+    .groupby("Bioma", as_index=False)["total_focos"]
+    .sum()
+    .sort_values("total_focos", ascending=False)
+)
+
+focos_por_municipio = (
+    dados_filtrados
+    .groupby("Municipio", as_index=False)["total_focos"]
+    .sum()
+    .sort_values("total_focos", ascending=False)
+)
+
+bioma_critico = focos_por_bioma.iloc[0]["Bioma"]
+
+municipio_critico = focos_por_municipio.iloc[0]["Municipio"]
 
 
-st.success("Dados carregados das tabelas Gold do Databricks.")
+# =========================================================
+# CABEÇALHO E KPIs
+# =========================================================
+
+st.subheader("Visão geral")
+
+st.caption(
+    f"Período selecionado: "
+    f"{min(anos_selecionados) if anos_selecionados else '—'} "
+    f"a {max(anos_selecionados) if anos_selecionados else '—'}"
+    if anos_selecionados
+    else "Nenhum ano selecionado"
+)
 
 col1, col2, col3, col4 = st.columns(4)
 
 col1.metric(
     "Total de focos",
-    f"{total_focos:,}".replace(",", ".")
+    formatar_inteiro(total_focos)
 )
 
 col2.metric(
-    "Ano com mais focos",
+    "Ano mais crítico",
     str(ano_critico)
 )
 
 col3.metric(
-    "Bioma com mais focos",
+    "Bioma mais afetado",
     bioma_critico
 )
 
 col4.metric(
-    "Município com mais focos",
-    municipio_critico.title()
+    "Risco médio de fogo",
+    formatar_decimal(risco_medio, 3)
 )
-
 
 st.divider()
 
@@ -166,36 +346,32 @@ st.divider()
 # ABAS DO DASHBOARD
 # =========================================================
 
-aba_anual, aba_bioma, aba_municipio, aba_dados = st.tabs([
-    "📈 Evolução anual",
-    "🌳 Análise por bioma",
-    "📍 Análise por município",
-    "📋 Dados detalhados"
+aba_geral, aba_bioma, aba_municipio, aba_sazonalidade = st.tabs([
+    "📊 Visão geral",
+    "🌳 Biomas",
+    "📍 Municípios",
+    "📅 Sazonalidade"
 ])
 
 
 # =========================================================
-# ABA 1 - EVOLUÇÃO ANUAL
+# ABA 1 - VISÃO GERAL
 # =========================================================
 
-with aba_anual:
+with aba_geral:
 
-    st.subheader("Evolução dos focos de calor")
+    st.subheader("Evolução anual dos focos")
 
     fig_anual = px.bar(
-        dados_anual,
+        focos_por_ano,
         x="Ano",
         y="total_focos",
         text="total_focos",
-        title="Total de focos por ano",
         labels={
             "Ano": "Ano",
             "total_focos": "Total de focos"
         },
-        hover_data=[
-            "risco_fogo_medio",
-            "variacao_percentual"
-        ]
+        title="Focos de calor por ano"
     )
 
     fig_anual.update_traces(
@@ -208,8 +384,6 @@ with aba_anual:
             tickmode="linear",
             dtick=1
         ),
-        yaxis_title="Total de focos",
-        xaxis_title="Ano",
         showlegend=False
     )
 
@@ -218,148 +392,120 @@ with aba_anual:
         use_container_width=True
     )
 
-    st.subheader("Variação anual")
-
-    dados_variacao = dados_anual[
-        ["Ano", "variacao_percentual"]
-    ].copy()
-
-    dados_variacao["variacao_percentual"] = (
-        dados_variacao["variacao_percentual"].round(2)
-    )
+    st.subheader("Resumo dos registros filtrados")
 
     st.dataframe(
-        dados_variacao,
+        dados_filtrados[
+            [
+                "Ano",
+                "Mes",
+                "Bioma",
+                "Municipio",
+                "total_focos"
+            ]
+        ].sort_values(
+            ["Ano", "total_focos"],
+            ascending=[True, False]
+        ),
         hide_index=True,
         use_container_width=True
     )
 
 
 # =========================================================
-# ABA 2 - ANÁLISE POR BIOMA
+# ABA 2 - BIOMAS
 # =========================================================
 
 with aba_bioma:
 
-    st.subheader("Distribuição dos focos por bioma")
+    st.subheader("Distribuição por bioma")
 
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        fig_bioma = px.bar(
-            dados_bioma,
-            x="Bioma",
-            y="total_focos",
-            text="total_focos",
-            title="Total de focos por bioma",
-            labels={
-                "Bioma": "Bioma",
-                "total_focos": "Total de focos"
-            },
-            hover_data=[
-                "risco_fogo_medio",
-                "precipitacao_media"
-            ]
+    dados_bioma = (
+        dados_filtrados
+        .groupby("Bioma", as_index=False)
+        .agg(
+            total_focos=("total_focos", "sum")
         )
-
-        fig_bioma.update_traces(
-            texttemplate="%{text:,.0f}",
-            textposition="outside"
-        )
-
-        fig_bioma.update_layout(
-            xaxis_title="Bioma",
-            yaxis_title="Total de focos",
-            showlegend=False
-        )
-
-        st.plotly_chart(
-            fig_bioma,
-            use_container_width=True
-        )
-
-    with col2:
-
-        fig_pizza = px.pie(
-            dados_bioma,
-            names="Bioma",
-            values="total_focos",
-            title="Participação de cada bioma",
-            hole=0.4
-        )
-
-        fig_pizza.update_traces(
-            textposition="inside",
-            textinfo="percent+label"
-        )
-
-        st.plotly_chart(
-            fig_pizza,
-            use_container_width=True
-        )
-
-    st.subheader("Indicadores por bioma")
-
-    dados_bioma_exibicao = dados_bioma.copy()
-
-    dados_bioma_exibicao["risco_fogo_medio"] = (
-        dados_bioma_exibicao["risco_fogo_medio"].round(3)
+        .sort_values("total_focos", ascending=False)
     )
 
-    dados_bioma_exibicao["precipitacao_media"] = (
-        dados_bioma_exibicao["precipitacao_media"].round(3)
+    fig_bioma = px.bar(
+        dados_bioma,
+        x="Bioma",
+        y="total_focos",
+        text="total_focos",
+        title="Total de focos por bioma",
+        labels={
+            "Bioma": "Bioma",
+            "total_focos": "Total de focos"
+        }
     )
 
-    st.dataframe(
-        dados_bioma_exibicao,
-        hide_index=True,
+    fig_bioma.update_traces(
+        texttemplate="%{text:,.0f}",
+        textposition="outside"
+    )
+
+    st.plotly_chart(
+        fig_bioma,
+        use_container_width=True
+    )
+
+    fig_pizza = px.pie(
+        dados_bioma,
+        names="Bioma",
+        values="total_focos",
+        title="Participação dos biomas",
+        hole=0.4
+    )
+
+    fig_pizza.update_traces(
+        textinfo="percent+label"
+    )
+
+    st.plotly_chart(
+        fig_pizza,
         use_container_width=True
     )
 
 
 # =========================================================
-# ABA 3 - ANÁLISE POR MUNICÍPIO
+# ABA 3 - MUNICÍPIOS
 # =========================================================
 
 with aba_municipio:
 
     st.subheader("Ranking de municípios")
 
+    quantidade_maxima = min(
+        30,
+        len(focos_por_municipio)
+    )
+
     quantidade = st.slider(
-        "Quantidade de municípios no ranking",
-        min_value=5,
-        max_value=min(30, len(dados_municipio)),
-        value=min(10, len(dados_municipio)),
-        step=5
+        "Municípios no ranking",
+        min_value=1,
+        max_value=quantidade_maxima,
+        value=min(10, quantidade_maxima)
     )
 
     dados_top = (
-        dados_municipio
-        .sort_values("total_focos", ascending=False)
+        focos_por_municipio
         .head(quantidade)
-        .copy()
+        .sort_values("total_focos", ascending=True)
     )
 
     fig_municipios = px.bar(
-        dados_top.sort_values(
-            "total_focos",
-            ascending=True
-        ),
+        dados_top,
         x="total_focos",
         y="Municipio",
         orientation="h",
         text="total_focos",
-        title=f"Top {quantidade} municípios por focos de calor",
+        title=f"Top {quantidade} municípios",
         labels={
             "Municipio": "Município",
             "total_focos": "Total de focos"
-        },
-        hover_data=[
-            "Estado",
-            "risco_fogo_medio",
-            "dias_sem_chuva_medio"
-        ]
+        }
     )
 
     fig_municipios.update_traces(
@@ -368,9 +514,6 @@ with aba_municipio:
     )
 
     fig_municipios.update_layout(
-        yaxis_title="Município",
-        xaxis_title="Total de focos",
-        showlegend=False,
         height=max(450, quantidade * 35)
     )
 
@@ -379,63 +522,155 @@ with aba_municipio:
         use_container_width=True
     )
 
-    st.subheader("Detalhamento dos municípios")
+    st.subheader("Indicadores municipais")
 
-    dados_top["risco_fogo_medio"] = (
-        dados_top["risco_fogo_medio"].round(3)
+    dados_municipio = dados_filtrados.copy()
+
+    dados_municipio["risco_ponderado"] = (
+        dados_municipio["risco_fogo_medio"]
+        * dados_municipio["qtd_risco_valido"]
     )
 
-    dados_top["dias_sem_chuva_medio"] = (
-        dados_top["dias_sem_chuva_medio"].round(1)
+    dados_municipio["dias_sem_chuva_ponderado"] = (
+        dados_municipio["dias_sem_chuva_medio"]
+        * dados_municipio["qtd_dias_sem_chuva_validos"]
+    )
+
+    resumo_municipios = (
+        dados_municipio
+        .groupby("Municipio", as_index=False)
+        .agg(
+            total_focos=("total_focos", "sum"),
+            soma_risco=("risco_ponderado", "sum"),
+            qtd_risco=("qtd_risco_valido", "sum"),
+            soma_dias=("dias_sem_chuva_ponderado", "sum"),
+            qtd_dias=("qtd_dias_sem_chuva_validos", "sum")
+        )
+    )
+
+    resumo_municipios["risco_fogo_medio"] = (
+        resumo_municipios["soma_risco"]
+        / resumo_municipios["qtd_risco"].replace(0, float("nan"))
+    )
+
+    resumo_municipios["dias_sem_chuva_medio"] = (
+        resumo_municipios["soma_dias"]
+        / resumo_municipios["qtd_dias"].replace(0, float("nan"))
     )
 
     st.dataframe(
-        dados_top,
+        resumo_municipios[
+            [
+                "Municipio",
+                "total_focos",
+                "risco_fogo_medio",
+                "dias_sem_chuva_medio"
+            ]
+        ].sort_values(
+            "total_focos",
+            ascending=False
+        ),
         hide_index=True,
         use_container_width=True
     )
 
 
 # =========================================================
-# ABA 4 - DADOS DETALHADOS
+# ABA 4 - SAZONALIDADE
 # =========================================================
 
-with aba_dados:
+with aba_sazonalidade:
 
-    st.subheader("Explore as tabelas Gold")
+    st.subheader("Distribuição mensal dos focos")
 
-    tipo_tabela = st.selectbox(
-        "Selecione a tabela",
-        [
-            "Resumo anual",
-            "Resumo por bioma",
-            "Resumo por município"
-        ]
+    focos_por_mes = (
+        dados_filtrados
+        .groupby("Mes", as_index=False)["total_focos"]
+        .sum()
+        .sort_values("Mes")
     )
 
-    if tipo_tabela == "Resumo anual":
+    focos_por_mes["Nome_mes"] = (
+        focos_por_mes["Mes"].map(nomes_meses)
+    )
 
-        st.dataframe(
-            dados_anual,
-            hide_index=True,
-            use_container_width=True
-        )
+    mes_critico = focos_por_mes.loc[
+        focos_por_mes["total_focos"].idxmax()
+    ]
 
-    elif tipo_tabela == "Resumo por bioma":
+    col1, col2 = st.columns(2)
 
-        st.dataframe(
-            dados_bioma,
-            hide_index=True,
-            use_container_width=True
-        )
+    col1.metric(
+        "Mês com mais focos",
+        mes_critico["Nome_mes"]
+    )
 
-    else:
+    col2.metric(
+        "Focos no mês mais crítico",
+        formatar_inteiro(mes_critico["total_focos"])
+    )
 
-        st.dataframe(
-            dados_municipio,
-            hide_index=True,
-            use_container_width=True
-        )
+    fig_mensal = px.bar(
+        focos_por_mes,
+        x="Nome_mes",
+        y="total_focos",
+        text="total_focos",
+        title="Focos por mês",
+        labels={
+            "Nome_mes": "Mês",
+            "total_focos": "Total de focos"
+        },
+        category_orders={
+            "Nome_mes": list(nomes_meses.values())
+        }
+    )
+
+    fig_mensal.update_traces(
+        texttemplate="%{text:,.0f}",
+        textposition="outside"
+    )
+
+    st.plotly_chart(
+        fig_mensal,
+        use_container_width=True
+    )
+
+    st.subheader("Comparação mensal entre anos")
+
+    comparacao = (
+        dados_filtrados
+        .groupby(
+            ["Ano", "Mes"],
+            as_index=False
+        )["total_focos"]
+        .sum()
+    )
+
+    comparacao["Nome_mes"] = (
+        comparacao["Mes"].map(nomes_meses)
+    )
+
+    fig_comparacao = px.line(
+        comparacao,
+        x="Nome_mes",
+        y="total_focos",
+        color="Ano",
+        markers=True,
+        title="Sazonalidade por ano",
+        labels={
+            "Nome_mes": "Mês",
+            "total_focos": "Total de focos",
+            "Ano": "Ano"
+        },
+        category_orders={
+            "Nome_mes": list(nomes_meses.values())
+        }
+    )
+
+    st.plotly_chart(
+        fig_comparacao,
+        use_container_width=True
+    )
 
 
 # =========================================================
@@ -445,7 +680,6 @@ with aba_dados:
 st.divider()
 
 st.caption(
-    "Projeto de análise de dados | Fonte: INPE | "
-    "Arquitetura Medallion: Bronze, Silver e Gold | "
-    "Dashboard desenvolvido com Streamlit e Databricks."
+    "Fonte: INPE | Arquitetura Medallion: Bronze, Silver e Gold | "
+    "Aplicação desenvolvida com Streamlit e Databricks."
 )
